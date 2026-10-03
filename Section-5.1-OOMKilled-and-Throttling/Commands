@@ -1,0 +1,36 @@
+# 0. Setup (Prerequisites)
+minikube addons enable metrics-server
+# Wait ~1-2 minutes for the metrics-server to start and collect data
+kubectl get pods -n kube-system | grep metrics-server
+kubectl top nodes # Verify metrics server is working
+
+# 1. Build & load
+eval $(minikube docker-env)
+docker build -t oom-demo:0.1 .
+
+# 2. Deploy & Observe
+kubectl create ns oom-lab
+kubectl -n oom-lab apply -f deployment-bad.yaml
+kubectl -n oom-lab get pods -l app=oom-demo -w
+kubectl -n oom-lab describe pod -l app=oom-demo | egrep -i 'Last State|Reason|Exit|OOM'
+kubectl -n oom-lab logs deploy/oom-demo --previous --tail=50 || true
+# Expect: Reason: OOMKilled, Exit Code: 137; restarts increasing -> CrashLoopBackOff
+
+# 3. Resolve Option A - increase limit (and request)
+kubectl -n oom-lab patch deploy oom-demo -p '{
+  "spec":{"template":{"spec":{"containers":[{"name":"app","resources":{
+    "requests":{"memory":"256Mi","cpu":"100m"},"limits":{"memory":"512Mi"}}}]}}}
+}'
+kubectl -n oom-lab rollout status deploy/oom-demo
+kubectl -n oom-lab get pods -l app=oom-demo -w
+
+# 4. Resolve Option B - reduce app allocation
+# Edit app.py to allocate fewer chunks, rebuild as oom-demo:0.2
+docker build -t oom-demo:0.2 .
+# Minikube: eval $(minikube docker-env) && docker build -t oom-demo:0.2 .
+kubectl -n oom-lab set image deploy/oom-demo app=oom-demo:0.2
+kubectl -n oom-lab rollout status deploy/oom-demo
+
+# 5. Verify & Monitor
+kubectl -n oom-lab describe pod -l app=oom-demo | egrep -i 'Last State|Reason|Restart'
+kubectl top pods -n oom-lab

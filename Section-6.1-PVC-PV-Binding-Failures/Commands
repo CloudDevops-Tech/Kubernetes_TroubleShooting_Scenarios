@@ -1,0 +1,49 @@
+# ---- Setup ----
+kubectl create ns storage-lab --dry-run=client -o yaml | kubectl apply -f -
+
+# ---- Scenario 1: PVC references a non-existent StorageClass ----
+
+# 1. Deploy & Observe (Expect Pending)
+kubectl apply -f pvc-bad-sc.yaml
+kubectl -n storage-lab get pvc data-badsc
+kubectl -n storage-lab describe pvc data-badsc     # Events: storageclass "non-existent-sc" not found
+kubectl -n storage-lab get pod app-badsc           # Status: Pending (waiting for PVC)
+
+# 2. Fix: Change to a valid StorageClass (or null for default)
+# Note: storageClassName is immutable on some PVCs, but patch often works in newer versions.
+# If patch fails, delete and recreate.
+kubectl -n storage-lab patch pvc data-badsc -p '{"spec":{"storageClassName":"standard"}}'
+
+# 3. Verify Fix
+kubectl -n storage-lab get pvc data-badsc -w       # Transitions to Bound
+kubectl -n storage-lab get pod app-badsc -w        # Transitions to Running
+
+
+# ---- Scenario 2: VolumeMode mismatch (Block vs Filesystem) ----
+
+# 1. Deploy & Observe (Expect Pending)
+kubectl -n storage-lab apply -f pvc-bad-mode.yaml
+kubectl -n storage-lab describe pvc data-badmode   # Events: provisioner does not support block volume
+# Block mode is usually not supported on local minikube/hostpath provisioners.
+
+# 2. Fix: Change to volumeMode: Filesystem
+# Note: volumeMode is IMMUTABLE. You must delete and recreate.
+kubectl -n storage-lab delete pvc data-badmode
+sed 's/Block/Filesystem/' pvc-bad-mode.yaml | kubectl apply -f -
+
+# 3. Verify Fix
+kubectl -n storage-lab get pvc data-badmode
+
+
+# ---- Scenario 3: Mount permission failure ----
+
+# 1. Deploy Bad Pod (non-root user, no fsGroup)
+kubectl apply -f pod-perms-bad.yaml
+kubectl -n storage-lab logs app-perms-bad          # Expect: "Permission denied" or "touch: /data/test: ..."
+
+# 2. Deploy Fixed Pod (uses fsGroup)
+kubectl apply -f pod-perms.yaml
+kubectl -n storage-lab logs app-perms              # Expect: Success (touch works)
+
+# ---- Cleanup ----
+# kubectl delete ns storage-lab

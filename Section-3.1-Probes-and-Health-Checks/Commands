@@ -1,0 +1,30 @@
+# ---- Liveness & Readiness Probes Demo (Node.js) ----
+
+# 1. Build & load the bad image
+# docker build -t failing-health-app:v1 .
+minikube image load failing-health-app:v1
+
+# 2. Deploy the bad version (overly aggressive probes)
+kubectl apply -f deployment-bad.yaml
+kubectl get pods -l app=failing-health-demo
+# READY column shows 0/1 for all pods
+
+# 3. Observe the problem
+kubectl get endpoints failing-health-service
+# No endpoints because no pods are ready
+kubectl logs -l app=failing-health-demo -f
+
+# 4. Build the fixed image (uses server-fixed.js)
+# cp server-fixed.js server.js
+# docker build -t failing-health-app:v2 .
+minikube image load failing-health-app:v2
+
+# 5. Deploy the fixed version (properly tuned probes)
+kubectl apply -f deployment-good.yaml
+kubectl get pods -l app=health-demo -w
+kubectl get endpoints health-demo-service
+
+# ---- Startup Probe Demo (Python) ----
+# See the startup-probe/ subfolder for a separate demo
+# that shows how startupProbe gates liveness/readiness
+# cd startup-probe/

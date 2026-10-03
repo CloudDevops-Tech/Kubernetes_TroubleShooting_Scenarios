@@ -1,0 +1,37 @@
+# 1. Build & load
+eval $(minikube docker-env)
+docker build -t rollout-demo:0.1 .
+
+# ---- Scenario 1: Wrong readiness path + tight progress deadline ----
+
+# 2. Deploy & Observe
+kubectl create ns rollout-lab
+kubectl -n rollout-lab apply -f deployment-bad.yaml
+kubectl -n rollout-lab rollout status deploy/rollout-demo --watch   # will time out ~60s
+kubectl -n rollout-lab describe deploy rollout-demo | sed -n '/Conditions/,$p'
+kubectl -n rollout-lab get pods -l app=rollout-demo -o wide
+kubectl -n rollout-lab describe pod -l app=rollout-demo | egrep -i 'Readiness|Events|Reason'
+# Expect: ProgressDeadlineExceeded, Pods Running but Ready=False
+
+# 3. Fix Option A - correct probe path
+kubectl -n rollout-lab patch deploy rollout-demo -p '{
+  "spec":{"template":{"spec":{"containers":[{"name":"app","readinessProbe":{"httpGet":{"path":"/healthz","port":8080}}}]}}}
+}'
+kubectl -n rollout-lab rollout status deploy/rollout-demo --watch
+
+# 4. Fix Option B - allow slight unavailability to unblock
+kubectl -n rollout-lab patch deploy rollout-demo -p '{
+  "spec":{"strategy":{"rollingUpdate":{"maxUnavailable":1,"maxSurge":1}}}
+}'
+
+# 5. Verify
+kubectl -n rollout-lab get deploy rollout-demo -o wide
+kubectl -n rollout-lab get rs -l app=rollout-demo
+kubectl -n rollout-lab get pods -l app=rollout-demo -o wide
+
+# ---- Scenario 2: Init container blocks progress ----
+
+# 6. Deploy & Observe
+kubectl -n rollout-lab apply -f deployment-init-bad.yaml
+kubectl -n rollout-lab rollout status deploy/rollout-init --watch
+kubectl -n rollout-lab describe pod -l app=rollout-init | sed -n '/Init Containers:/,/Containers:/p'

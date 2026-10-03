@@ -1,0 +1,52 @@
+# ---- Setup ----
+
+# 1. Enable the ingress controller (Minikube)
+minikube addons enable ingress
+kubectl -n ingress-nginx get pods -w
+
+# 2. Deploy an echo app and Service
+kubectl create ns edge-lab
+kubectl -n edge-lab create deploy echo --image=ealen/echo-server:0.6.0
+kubectl -n edge-lab expose deploy echo --port=80 --target-port=80
+kubectl -n edge-lab get endpoints echo -o wide   # should list Pod IP(s)
+
+# ---- Recreate: broken Ingress (wrong service port) ----
+
+# 3. Apply bad ingress
+kubectl apply -f bad-ingress.yaml
+kubectl -n edge-lab describe ingress echo | sed -n '/Rules/,$p'
+
+# 4. Test with correct Host header (but wrong backend port)
+IP=$(minikube ip)
+curl -s -H 'Host: app.example.local' http://$IP/ -i | head
+# Expect 502/503 due to no endpoints on port 8080
+kubectl -n ingress-nginx logs deploy/ingress-nginx-controller | tail
+
+# ---- Fix the Service port ----
+
+# 5. Patch to correct port
+kubectl -n edge-lab patch ingress echo -p '{
+  "spec":{"rules":[{"host":"app.example.local","http":{"paths":[{"path":"/","pathType":"Prefix","backend":{"service":{"name":"echo","port":{"number":80}}}}]}}]}
+}'
+curl -s -H 'Host: app.example.local' http://$IP/ | head -n1
+# Should return JSON echo output
+
+# ---- Break host matching -> 404 from default backend ----
+
+# 6. Test with wrong host
+curl -s -H 'Host: wrong.local' http://$IP/ -i | head
+# Expect: 404 Not Found (no matching host rule)
+
+# ---- (Optional) Add TLS with a self-signed Secret ----
+
+# 7. Create a self-signed cert
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -subj "/CN=app.example.local" \
+  -keyout /tmp/tls.key -out /tmp/tls.crt
+kubectl -n edge-lab create secret tls echo-tls --key=/tmp/tls.key --cert=/tmp/tls.crt
+
+# 8. Patch Ingress to use TLS
+kubectl -n edge-lab patch ingress echo --type='json' -p='[
+ {"op":"add","path":"/spec/tls","value":[{"hosts":["app.example.local"],"secretName":"echo-tls"}]}
+]'
+curl -s --resolve app.example.local:443:"$IP" https://app.example.local/ -k | head -n1

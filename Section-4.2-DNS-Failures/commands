@@ -1,0 +1,24 @@
+# ---- Recreate: block DNS, observe failures ----
+
+# 1. Create sandbox namespace and test pod
+kubectl create ns dns-lab
+kubectl -n dns-lab run tester --image=busybox:1.36 --restart=Never --command -- sleep 3600
+
+# 2. Apply default-deny egress policy
+kubectl -n dns-lab apply -f deny-egress.yaml
+
+# 3. DNS lookups now fail
+kubectl -n dns-lab exec tester -- nslookup kubernetes.default || true
+kubectl -n dns-lab exec tester -- nslookup google.com || true
+
+# ---- Resolve: allow DNS to CoreDNS ----
+
+# 4. Allow UDP+TCP 53 to kube-dns
+kubectl -n dns-lab apply -f allow-dns.yaml
+
+# 5. Re-test (should succeed)
+kubectl -n dns-lab exec tester -- nslookup google.com
+kubectl -n dns-lab exec tester -- nslookup kubernetes.default.svc.cluster.local
+
+# ---- Cleanup ----
+kubectl delete ns dns-lab

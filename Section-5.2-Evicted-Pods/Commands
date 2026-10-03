@@ -1,0 +1,21 @@
+# ---- Recreate: Pod exceeds ephemeral-storage limit -> Evicted ----
+
+# 1. Deploy & Observe
+kubectl apply -f evict-ephemeral.yaml
+kubectl get pod eph-evict-demo -w
+kubectl describe pod eph-evict-demo | sed -n '/Status:/,/Events/ p'
+# Expect: Status: Failed  Reason: Evicted
+kubectl get events --sort-by=.lastTimestamp | egrep -i 'evict|ephemeral'
+
+# ---- Resolve Option A: Use a PVC for large files (preferred) ----
+
+# 2. Apply PVC + fixed pod
+kubectl apply -f pvc-and-pod.yaml
+kubectl get pod eph-fixed-pvc -w    # should stay Running; no Evicted
+
+# ---- Resolve Option B: Increase ephemeral-storage limit ----
+
+# 3. Delete and recreate with higher limit
+kubectl delete pod eph-evict-demo --ignore-not-found
+# Edit evict-ephemeral.yaml: change limits.ephemeral-storage to 300Mi
+kubectl apply -f evict-ephemeral.yaml
